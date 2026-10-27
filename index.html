@@ -116,7 +116,7 @@ async function unlock(pw, remember) {
   const data = await C.open(ui.pending, pw);
   if (data.t !== 'o' || !data.project || !data.project.id) throw new Error('Diese Daten passen nicht.');
   const old = db.projects[data.project.id];
-  const p = { project: data.project, days: data.days || [], labels: data.labels || {}, people: data.people || [], plan: data.plan || {}, entries: {}, ratings: {}, sentAt: old ? old.sentAt : 0 };
+  const p = { project: data.project, days: data.days || [], labels: data.labels || {}, people: data.people || [], plan: data.plan || {}, entries: {}, ratings: {}, sentAt: old ? old.sentAt : 0, recvAt: Date.now() };
   const m = C.merge({ people: p.people, entries: old ? old.entries : {}, ratings: old ? old.ratings : {} }, { entries: data.entries, ratings: data.ratings });
   p.entries = m.entries; p.ratings = m.ratings;
   db.projects[data.project.id] = p; save();
@@ -181,7 +181,8 @@ function viewProject() {
       ${list.some(x => entry(p, x.id, ui.day)) ? '<div style="text-align:center;margin:18px 0"><button class="link" id="dayClear" style="color:var(--bad)">Alle Einträge dieses Tages löschen</button></div>' : ''}`;
   }
   const n = Object.keys(p.entries).length + Object.keys(p.ratings).length;
-  return `${head}<main>${body}</main>
+  return `${head}<main>${body}
+    <div style="text-align:center;margin:36px 0 12px"><button class="link" id="projDel" style="color:var(--bad)">Projekt von diesem Gerät löschen</button></div></main>
     <div class="bar"><div class="sub">${n} Einträge${p.sentAt ? `<br>gesendet ${new Date(p.sentAt).toLocaleString('de-CH', { dateStyle: 'short', timeStyle: 'short' })}` : ''}</div>
       <button class="primary" id="send">Senden</button></div>`;
 }
@@ -209,6 +210,14 @@ function bind() {
   document.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => editEntry(b.dataset.edit));
   document.querySelectorAll('[data-rate]').forEach(b => b.onclick = () => editRating(b.dataset.rate));
   if ($('#send')) $('#send').onclick = send;
+  if ($('#projDel')) $('#projDel').onclick = () => {
+    const p = proj(), sent = Math.max(p.sentAt || 0, p.recvAt || 0); // nur hier geänderte, noch nicht gesendete Einträge
+    const open = [...Object.values(p.entries), ...Object.values(p.ratings)].filter(e => (e.at || 0) > sent).length;
+    const name = [p.project.no, p.project.name].filter(Boolean).join(' · ');
+    if (open && !confirm(`${open} ${open === 1 ? 'Eintrag wurde' : 'Einträge wurden'} noch nicht gesendet und ${open === 1 ? 'geht' : 'gehen'} verloren.\nTrotzdem löschen?`)) return;
+    if (!confirm(`Projekt „${name}“ mit allen Einträgen von diesem Gerät löschen?`)) return;
+    delete db.projects[ui.pid]; save(); ui.pid = null; render(); toast('✓ Projekt gelöscht');
+  };
   if ($('#dayClear')) $('#dayClear').onclick = () => {
     const p = proj(), had = dayPeople(p, ui.day).filter(x => entry(p, x.id, ui.day));
     if (!confirm(`${had.length} ${had.length === 1 ? 'Eintrag' : 'Einträge'} vom ${C.fmtDay(ui.day)} löschen?\nDanach steht wieder die geplante Zeit da.`)) return;
