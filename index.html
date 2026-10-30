@@ -73,12 +73,21 @@
   dialog .head h3 { flex: 1; margin: 0; font-size: 17px; text-align: center; }
   dialog .body { padding: 16px 16px calc(env(safe-area-inset-bottom) + 30px); }
   .hours { font-size: 15px; color: var(--muted); margin: -4px 0 14px; }
+  .xdest { display: grid; grid-template-columns: 1fr 2fr; gap: 8px; margin: 8px 0 2px; }
+  .xdest input { padding: 9px 10px; }
+  .search { margin: 10px 12px 0; }
+  .chk { width: 34px; height: 34px; border-radius: 50%; border: 2px solid #4a505c; flex: none; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 18px; color: #111; }
+  .chk.done { background: var(--ok); border-color: var(--ok); } .chk.part { background: var(--warn); border-color: var(--warn); }
+  .row.done .name { color: var(--muted); text-decoration: line-through; }
+  .qty { min-width: 64px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; padding: 8px 10px; }
+  .big { font-size: 34px; text-align: center; font-weight: 700; }
   .toast { position: fixed; left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom) + 90px); background: #2c313b; padding: 12px 14px; border-radius: 12px; text-align: center; z-index: 20; transition: opacity .4s; }
 </style>
 </head>
 <body>
 <div id="app"></div>
 <script src="core.js"></script>
+<script src="list.js"></script>
 <script>
 'use strict';
 const C = Core;
@@ -90,7 +99,8 @@ let db = load();
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (_) { toast('⚠️ Speichern ging nicht (Speicher voll?)'); } };
 const pwGet = () => { try { return localStorage.getItem(PWKEY) || ''; } catch (_) { return ''; } };
 const pwSet = pw => { try { if (pw) localStorage.setItem(PWKEY, pw); else localStorage.removeItem(PWKEY); } catch (_) {} };
-let ui = { pid: null, day: null, tab: 'time', pending: null, error: '' };
+const X = XCore;
+let ui = { pid: null, day: null, tab: 'time', pending: null, error: '', show: 'all', q: '' };
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 
 function toast(msg) {
@@ -114,6 +124,7 @@ function takeHash() {
 }
 async function unlock(pw, remember) {
   const data = await C.open(ui.pending, pw);
+  if (data.t === 'x' && data.project && data.project.id) return unlockList(data, pw, remember);
   if (data.t !== 'o' || !data.project || !data.project.id) throw new Error('Diese Daten passen nicht.');
   const old = db.projects[data.project.id];
   const p = { project: data.project, days: data.days || [], labels: data.labels || {}, people: data.people || [], plan: data.plan || {}, entries: {}, ratings: {}, sentAt: old ? old.sentAt : 0, recvAt: Date.now() };
@@ -126,6 +137,18 @@ async function unlock(pw, remember) {
   toast(old ? '✓ Projekt aktualisiert, deine Einträge sind geblieben' : '✓ Projekt übernommen');
 }
 
+// Liste zum Abhaken: Artikel mit Menge, Ziel (Projekt und Nummer)
+function unlockList(data, pw, remember) {
+  const id = `x-${data.project.id}`, old = db.projects[id];
+  const items = (data.items || []).map(a => ({ k: X.key(a[0]), name: String(a[0] || ''), group: String(a[1] || ''), qty: Number(a[2]) || 0, sub: String(a[3] || '') })).filter(i => i.k);
+  const base = { items, take: old ? old.take : {}, dest: old ? old.dest : {} };
+  const m = X.merge(base, { take: data.take, dest: data.dest });
+  db.projects[id] = { kind: 'x', project: data.project, strike: data.strike || '', items, take: m.take, dest: m.dest, days: [], people: [], sentAt: old ? old.sentAt : 0, recvAt: Date.now() };
+  save(); pwSet(remember ? pw : '');
+  ui.pending = null; ui.pid = id; ui.show = 'all'; ui.q = '';
+  toast(old ? '✓ Liste aktualisiert, deine Einträge sind geblieben' : '✓ Liste übernommen');
+}
+
 function viewUnlock() {
   return `<div class="card" style="margin-top:40px">
       <form id="unl"><label class="f"><span>Passwort</span><input id="pw" type="password" autocomplete="current-password" value="${esc(pwGet())}" required></label>
@@ -135,13 +158,14 @@ function viewUnlock() {
 }
 
 function viewHome() {
-  const list = Object.values(db.projects).sort((a, b) => String(b.days[0] || '').localeCompare(String(a.days[0] || '')));
+  const list = Object.entries(db.projects).sort(([, a], [, b]) => String((b.days || [])[0] || '').localeCompare(String((a.days || [])[0] || '')));
   if (!list.length) return '';
+  const meta = p => (p.kind === 'x' ? (c => `📦 ${c.done} von ${c.items} abgehakt${p.dest && p.dest.no ? ` · → ${esc(p.dest.no)}` : ''}`)(X.count(p.items, p.take))
+    : `${p.days.length ? `${esc(C.fmtDay(p.days[0]))}${p.days.length > 1 ? ` – ${esc(C.fmtDay(p.days[p.days.length - 1]))}` : ''} · ` : ''}${p.people.length} Personen`);
   return `<header><div class="top"><h1>Projekte</h1></div></header>
-    ${list.length ? `<h2></h2><div class="list">${list.map(p => `<button class="row" data-open="${esc(p.project.id)}"><div class="grow">
+    <h2></h2><div class="list">${list.map(([id, p]) => `<button class="row" data-open="${esc(id)}"><div class="grow">
         <div class="name">${esc([p.project.no, p.project.name].filter(Boolean).join(' · '))}</div>
-        <div class="meta">${p.days.length ? `${esc(C.fmtDay(p.days[0]))}${p.days.length > 1 ? ` – ${esc(C.fmtDay(p.days[p.days.length - 1]))}` : ''} · ` : ''}${p.people.length} Personen${p.sentAt ? ` · gesendet ${new Date(p.sentAt).toLocaleDateString('de-CH')}` : ''}</div></div><span class="chev">›</span></button>`).join('')}</div>`
-      : ''}`;
+        <div class="meta">${meta(p)}${p.sentAt ? ` · gesendet ${new Date(p.sentAt).toLocaleDateString('de-CH')}` : ''}</div></div><span class="chev">›</span></button>`).join('')}</div>`;
 }
 
 function personMeta(e, pl) {
@@ -187,9 +211,54 @@ function viewProject() {
       <button class="primary" id="send">Senden</button></div>`;
 }
 
+const takeOf = (p, i) => (p.take[i.k] ? p.take[i.k].qty : 0);
+const stateOf = (p, i) => { const q = takeOf(p, i); return q >= i.qty && q > 0 ? 'done' : q > 0 ? 'part' : ''; };
+function viewList() {
+  const p = proj(), c = X.count(p.items, p.take), q = ui.q.trim().toLowerCase();
+  const shown = p.items.filter(i => (ui.show === 'all' || (ui.show === 'open' ? stateOf(p, i) !== 'done' : stateOf(p, i))) && (!q || i.name.toLowerCase().includes(q)));
+  const groups = new Map(); shown.forEach(i => { const g = i.group || 'Ohne Gruppe'; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(i); });
+  const head = `<header><div class="top"><button class="link" id="back">‹ Projekte</button><h1>${esc(p.project.no || p.project.name)}</h1></div>
+    <div class="sub">${esc([p.project.name, p.strike ? `Abbau ${p.strike}` : ''].filter(Boolean).join(' · '))}</div>
+    <div class="xdest"><input id="dNo" placeholder="Nummer" value="${esc(p.dest.no || '')}" autocapitalize="characters"><input id="dName" placeholder="weiter an Projekt" value="${esc(p.dest.name || '')}"></div>
+    <div class="tabs">${[['all', `Alle ${c.items}`], ['open', `Offen ${c.open + c.part}`], ['done', `Geladen ${c.done + c.part}`]].map(([k, t]) => `<button data-show="${k}" class="${ui.show === k ? 'on' : ''}">${t}</button>`).join('')}</div></header>`;
+  const row = i => { const s = stateOf(p, i), t = takeOf(p, i);
+    return `<div class="row ${s}"><button class="chk ${s}" data-chk="${esc(i.k)}">${s === 'done' ? '✓' : s === 'part' ? '–' : ''}</button>
+      <div class="grow" data-chk="${esc(i.k)}"><div class="name">${esc(i.name)}</div><div class="meta">${X.fmt(i.qty)} Stk.${i.sub ? ` · ${esc(i.sub)}` : ''}</div></div>
+      <button class="qty" data-qty="${esc(i.k)}">${t ? X.fmt(t) : '–'}<span class="sub">/${X.fmt(i.qty)}</span></button></div>`; };
+  const body = `<div class="search"><input id="q" type="search" placeholder="Suchen" value="${esc(ui.q)}"></div>
+    ${shown.length ? [...groups].map(([g, list]) => `<h2>${esc(g)}</h2><div class="list">${list.map(row).join('')}</div>`).join('') : '<div class="empty">Nichts gefunden.</div>'}`;
+  return `${head}<main>${body}
+    <div style="text-align:center;margin:36px 0 12px"><button class="link" id="projDel" style="color:var(--bad)">Projekt von diesem Gerät löschen</button></div></main>
+    <div class="bar"><div class="sub">${c.done} von ${c.items} abgehakt${c.part ? `, ${c.part} teilweise` : ''}${p.sentAt ? `<br>gesendet ${new Date(p.sentAt).toLocaleString('de-CH', { dateStyle: 'short', timeStyle: 'short' })}` : ''}</div>
+      <button class="primary" id="send">Senden</button></div>`;
+}
+function setTake(k, qty) { const p = proj(); p.take[k] = X.cleanTake({ qty, at: Date.now() }); save(); }
+function editQty(k) {
+  const p = proj(), i = p.items.find(x => x.k === k), t = takeOf(p, i);
+  const html = `<div class="sub" style="margin-bottom:14px">${X.fmt(i.qty)} Stk. auf der Liste${i.group ? ` · ${esc(i.group)}` : ''}</div>
+    <label class="f"><span>Geladen</span><div class="stepper"><button type="button" data-d="-1">−</button><input id="xQ" class="big" type="number" inputmode="decimal" min="0" step="any" value="${t || ''}" placeholder="0"><button type="button" data-d="1">+</button></div></label>
+    <div class="grid2"><button type="button" id="xNone">Nichts</button><button type="button" id="xAll">Alle ${X.fmt(i.qty)}</button></div>`;
+  sheet(i.name, html, dlg => setTake(k, $('#xQ', dlg).value || 0), (dlg, close) => {
+    const inp = $('#xQ', dlg);
+    dlg.querySelectorAll('[data-d]').forEach(b => b.onclick = () => { inp.value = Math.max(0, (Number(inp.value) || 0) + Number(b.dataset.d)); });
+    $('#xNone', dlg).onclick = () => { setTake(k, 0); close(); render(); };
+    $('#xAll', dlg).onclick = () => { setTake(k, i.qty); close(); render(); };
+  });
+}
+function bindList() {
+  const p = proj();
+  document.querySelectorAll('[data-show]').forEach(b => b.onclick = () => { ui.show = b.dataset.show; render(); });
+  document.querySelectorAll('[data-chk]').forEach(b => b.onclick = () => { const i = p.items.find(x => x.k === b.dataset.chk); setTake(i.k, takeOf(p, i) > 0 ? 0 : i.qty); render(); });
+  document.querySelectorAll('[data-qty]').forEach(b => b.onclick = () => editQty(b.dataset.qty));
+  const dest = () => { p.dest = X.cleanDest({ no: $('#dNo').value, name: $('#dName').value, at: Date.now() }); save(); };
+  $('#dNo').onchange = dest; $('#dName').onchange = dest;
+  const q = $('#q'); q.oninput = () => { ui.q = q.value; const pos = q.selectionStart; render(); const n = $('#q'); n.focus(); n.setSelectionRange(pos, pos); };
+}
+
 function render() {
   const app = $('#app');
   if (ui.pending) app.innerHTML = viewUnlock();
+  else if (ui.pid && db.projects[ui.pid] && db.projects[ui.pid].kind === 'x') app.innerHTML = viewList();
   else if (ui.pid && db.projects[ui.pid]) app.innerHTML = viewProject();
   else { ui.pid = null; app.innerHTML = viewHome(); }
   bind();
@@ -203,7 +272,7 @@ function bind() {
     try { await unlock($('#pw').value, $('#rem').checked); } catch (err) { ui.error = err.message; }
     render();
   };
-  document.querySelectorAll('[data-open]').forEach(b => b.onclick = () => { ui.pid = b.dataset.open; ui.day = null; ui.tab = 'time'; render(); scrollTo(0, 0); });
+  document.querySelectorAll('[data-open]').forEach(b => b.onclick = () => { ui.pid = b.dataset.open; ui.day = null; ui.tab = 'time'; ui.show = 'all'; ui.q = ''; render(); scrollTo(0, 0); });
   if ($('#back')) $('#back').onclick = () => { ui.pid = null; render(); };
   document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { ui.tab = b.dataset.tab; render(); });
   document.querySelectorAll('[data-day]').forEach(b => b.onclick = () => { ui.day = b.dataset.day; render(); });
@@ -212,12 +281,13 @@ function bind() {
   if ($('#send')) $('#send').onclick = send;
   if ($('#projDel')) $('#projDel').onclick = () => {
     const p = proj(), sent = Math.max(p.sentAt || 0, p.recvAt || 0); // nur hier geänderte, noch nicht gesendete Einträge
-    const open = [...Object.values(p.entries), ...Object.values(p.ratings)].filter(e => (e.at || 0) > sent).length;
+    const open = (p.kind === 'x' ? [...Object.values(p.take), p.dest] : [...Object.values(p.entries), ...Object.values(p.ratings)]).filter(e => (e.at || 0) > sent).length;
     const name = [p.project.no, p.project.name].filter(Boolean).join(' · ');
     if (open && !confirm(`${open} ${open === 1 ? 'Eintrag wurde' : 'Einträge wurden'} noch nicht gesendet und ${open === 1 ? 'geht' : 'gehen'} verloren.\nTrotzdem löschen?`)) return;
     if (!confirm(`Projekt „${name}“ mit allen Einträgen von diesem Gerät löschen?`)) return;
     delete db.projects[ui.pid]; save(); ui.pid = null; render(); toast('✓ Projekt gelöscht');
   };
+  if (proj() && proj().kind === 'x') { bindList(); return; }
   if ($('#dayClear')) $('#dayClear').onclick = () => {
     const p = proj(), had = dayPeople(p, ui.day).filter(x => entry(p, x.id, ui.day));
     if (!confirm(`${had.length} ${had.length === 1 ? 'Eintrag' : 'Einträge'} vom ${C.fmtDay(ui.day)} löschen?\nDanach steht wieder die geplante Zeit da.`)) return;
@@ -307,9 +377,11 @@ async function send() {
   if (!pw) { pw = prompt('Passwort:') || ''; if (!pw) return; }
   const btn = $('#send'); btn.disabled = true; btn.textContent = 'Verschlüssle …';
   try {
-    const text = await C.seal({ t: 'b', v: 1, project: { id: p.project.id, no: p.project.no, name: p.project.name }, entries: p.entries, ratings: p.ratings, at: Date.now() }, pw);
+    const head = { id: p.project.id, no: p.project.no, name: p.project.name };
+    const text = await C.seal(p.kind === 'x' ? { t: 'y', v: 1, project: head, take: p.take, dest: p.dest, at: Date.now() }
+      : { t: 'b', v: 1, project: head, entries: p.entries, ratings: p.ratings, at: Date.now() }, pw);
     const safe = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9-]+/g, '-').replace(/^-|-$/g, '');
-    const name = `${safe(p.project.no || p.project.name) || 'Projekt'}.txt`;
+    const name = `${safe(p.project.no || p.project.name) || 'Projekt'}${p.kind === 'x' ? '_Liste' : ''}.txt`;
     const file = new File([text], name, { type: 'text/plain' });
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       try { await navigator.share({ files: [file], title: name }); p.sentAt = Date.now(); save(); toast('✓ Gesendet'); }
