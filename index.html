@@ -171,8 +171,10 @@ function viewHome() {
 function personMeta(e, pl) {
   if (!e) return pl ? `geplant ${esc(pl.start)}–${esc(pl.end)}${pl.note ? ' · ' + esc(pl.note) : ''}` : '<span>noch nichts</span>';
   const bits = [];
-  if (e.start || e.end) bits.push(`${e.start || '?'}–${e.end || '?'}${e.pause ? ` · ${e.pause}′ Pause` : ''}`);
-  if (pl && (e.start !== pl.start || e.end !== pl.end)) bits.push(`geplant ${pl.start}–${pl.end}`);
+  // Anfang und Ende werden je für sich bestätigt; fehlt eines, steht die geplante Zeit da
+  const part = (t, plan) => (t ? `${t} ✓` : plan ? `(${plan})` : '–');
+  if (e.start || e.end || pl) bits.push(`${part(e.start, pl && pl.start)} – ${part(e.end, pl && pl.end)}${e.start && e.end && e.pause ? ` · ${e.pause}′ Pause` : ''}`);
+  if (pl && e.start && e.end && (e.start !== pl.start || e.end !== pl.end)) bits.push(`geplant ${pl.start}–${pl.end}`);
   if (e.meal) bits.push('🍴'); if (e.park) bits.push(`P ${C.PARK[e.park]}`); if (e.exp) bits.push(`CHF ${C.chf(e.exp)}`); if (e.note) bits.push('📝');
   return esc(bits.join(' · ')) || 'noch nichts';
 }
@@ -195,12 +197,13 @@ function viewProject() {
   else {
     const min = dayMin(p, ui.day);
     const row = x => { const e = entry(p, x.id, ui.day), pl = planOf(p, x.id, ui.day), m = C.workMin(e), func = (pl && pl.func) || x.func;
-      return `<button class="row" data-edit="${esc(x.id)}"><span class="dot ${e && e.start && e.end ? 'ok' : e ? 'half' : ''}"></span><div class="grow"><div class="name">${esc(x.name)}</div>
+      return `<button class="row" data-edit="${esc(x.id)}"><span class="dot ${e && e.start && e.end ? 'ok' : e && e.start ? 'half' : ''}"></span><div class="grow"><div class="name">${esc(x.name)}</div>
         <div class="meta">${esc(func ? `${func} · ` : '')}${personMeta(e, pl)}</div></div><div class="h">${m ? C.hours(m) : ''}</div><span class="chev">›</span></button>`; };
     const list = dayPeople(p, ui.day);
-    const open = list.filter(x => planOf(p, x.id, ui.day) && !entry(p, x.id, ui.day)).length;
+    const noStart = list.filter(x => planOf(p, x.id, ui.day) && !(entry(p, x.id, ui.day) || {}).start).length;
+    const noEnd = list.filter(x => planOf(p, x.id, ui.day) && (entry(p, x.id, ui.day) || {}).start && !entry(p, x.id, ui.day).end).length;
     body = `<h2>${esc(C.fmtDay(ui.day))}${min ? ` · ${C.hours(min)} Std.` : ''}</h2>
-      ${open ? `<div style="margin:0 12px 10px"><button id="asPlan" style="width:100%">Alle ${open} wie geplant eintragen</button></div>` : ''}
+      ${noStart || noEnd ? `<div style="margin:0 12px 10px;display:flex;gap:8px">${noStart ? `<button id="okStart" style="flex:1">Anfang bestätigen (${noStart})</button>` : ''}${noEnd ? `<button id="okEnd" style="flex:1">Ende bestätigen (${noEnd})</button>` : ''}</div>` : ''}
       ${list.length ? `<div class="list">${list.map(row).join('')}</div>` : '<div class="empty">An diesem Tag ist niemand eingeplant.</div>'}
       ${list.some(x => entry(p, x.id, ui.day)) ? '<div style="text-align:center;margin:18px 0"><button class="link" id="dayClear" style="color:var(--bad)">Alle Einträge dieses Tages löschen</button></div>' : ''}`;
   }
@@ -294,12 +297,22 @@ function bind() {
     had.forEach(x => delete p.entries[C.key(x.id, ui.day)]);
     save(); render(); toast('✓ Einträge gelöscht');
   };
-  if ($('#asPlan')) $('#asPlan').onclick = () => {
-    const p = proj(), todo = dayPeople(p, ui.day).filter(x => planOf(p, x.id, ui.day) && !entry(p, x.id, ui.day));
-    if (!todo.length || !confirm(`Für ${todo.length} ${todo.length === 1 ? 'Person' : 'Personen'} ohne Eintrag die geplante Zeit eintragen?\nBestehende Einträge bleiben, wie sie sind.`)) return;
-    todo.forEach(x => { const pl = planOf(p, x.id, ui.day); p.entries[C.key(x.id, ui.day)] = C.cleanEntry({ start: pl.start, end: pl.end, pause: C.PAUSE, at: Date.now() }); });
-    save(); render(); toast('✓ Wie geplant eingetragen – Abweichungen einzeln anpassen');
+  // Morgens: Anfang laut Plan für alle ohne Anfang; abends: Ende laut Plan für alle mit Anfang und ohne Ende. Nie überschreiben.
+  const confirmAll = which => {
+    const p = proj(), d = ui.day;
+    const todo = dayPeople(p, d).filter(x => { const pl = planOf(p, x.id, d), e = entry(p, x.id, d) || {}; return pl && (which === 'start' ? !e.start : e.start && !e.end); });
+    if (!todo.length) return;
+    const what = which === 'start' ? 'den geplanten Anfang' : 'das geplante Ende';
+    if (!confirm(`Für ${todo.length} ${todo.length === 1 ? 'Person' : 'Personen'} ${what} bestätigen?\nBereits bestätigte Zeiten bleiben, wie sie sind.`)) return;
+    todo.forEach(x => {
+      const pl = planOf(p, x.id, d), e = entry(p, x.id, d) || { pause: C.PAUSE };
+      p.entries[C.key(x.id, d)] = C.cleanEntry({ ...e, [which]: pl[which], at: Date.now() });
+    });
+    save(); render(); toast(which === 'start' ? '✓ Anfang bestätigt – Abweichungen einzeln anpassen' : '✓ Ende bestätigt – Abweichungen einzeln anpassen');
   };
+  if ($('#okStart')) $('#okStart').onclick = () => confirmAll('start');
+  if ($('#okEnd')) $('#okEnd').onclick = () => confirmAll('end');
+
   const on = $('.chip.on'); if (on) on.scrollIntoView({ inline: 'center', block: 'nearest' });
 }
 
@@ -317,13 +330,14 @@ function sheet(title, html, onSave, extra) {
 }
 function editEntry(id) {
   const p = proj(), x = p.people.find(y => y.id === id), d = ui.day, pl = planOf(p, id, d);
-  const e = entry(p, id, d) || { start: pl ? pl.start : '', end: pl ? pl.end : '', pause: C.PAUSE, meal: false, park: '', exp: 0, expText: '', note: '' };
+  const e = entry(p, id, d) || { start: '', end: '', pause: C.PAUSE, meal: false, park: '', exp: 0, expText: '', note: '' };
   let park = e.park, meal = e.meal;
   // gleiche Zeiten für alle nur ohne Plan (sonst gilt pro Person die geplante Zeit)
   const others = Object.keys(p.plan || {}).length ? 0 : dayPeople(p, d).filter(y => y.id !== id && !entry(p, y.id, d)).length;
   const html = `<div class="sub" style="margin-bottom:14px">${esc((pl && pl.func) || x.func || '')} · ${esc(C.fmtDay(d))}${pl ? `<br>geplant ${esc(pl.start)}–${esc(pl.end)}${pl.note ? ` · ${esc(pl.note)}` : ''}` : ''}</div>
     <div class="grid2"><label class="f"><span>Anfang</span><input type="time" id="eS" value="${esc(e.start)}"></label>
       <label class="f"><span>Ende</span><input type="time" id="eE" value="${esc(e.end)}"></label></div>
+    <div class="grid2" style="margin:-6px 0 14px">${['S', 'E'].map(k => `<div style="display:flex;gap:6px">${pl ? `<button type="button" class="small" data-fill="${k}" data-t="${esc(k === 'S' ? pl.start : pl.end)}" style="flex:1;padding:8px 4px;font-size:14px">${esc(k === 'S' ? pl.start : pl.end)} geplant</button>` : ''}<button type="button" data-fill="${k}" data-t="now" style="flex:1;padding:8px 4px;font-size:14px">jetzt</button></div>`).join('')}</div>
     <label class="f"><span>Pause (Minuten)</span><div class="stepper"><button type="button" data-p="-15">−</button><input id="eP" type="number" inputmode="numeric" min="0" max="720" step="5" value="${e.pause}"><button type="button" data-p="15">+</button></div></label>
     <div class="hours" id="eH"></div>
     <label class="f"><span>Essen</span><div class="seg" id="eM"><button type="button" data-v="0">Nein</button><button type="button" data-v="1">Ja</button></div></label>
@@ -331,11 +345,21 @@ function editEntry(id) {
     <div class="grid2"><label class="f"><span>Spesen CHF</span><input id="eX" type="text" inputmode="decimal" placeholder="0.00" value="${e.exp ? esc(String(e.exp)) : ''}"></label>
       <label class="f"><span>Spesen für</span><input id="eXT" type="text" placeholder="z.B. Parkhaus" value="${esc(e.expText)}"></label></div>
     <label class="f"><span>Sonstiges</span><textarea id="eN" placeholder="Bemerkung">${esc(e.note)}</textarea></label>
-    ${pl ? `<button type="button" id="ePlan" style="width:100%;margin-top:6px">Geplante Zeit einsetzen (${esc(pl.start)}–${esc(pl.end)})</button>` : ''}
     ${others ? `<button type="button" id="eAll" style="width:100%;margin-top:6px">Anfang, Ende und Pause für alle ohne Eintrag übernehmen (${others})</button>` : ''}
     ${entry(p, id, d) ? '<button type="button" id="eDel" class="link" style="color:var(--bad);margin-top:16px">Eintrag löschen</button>' : ''}`;
   const read = dlg => C.cleanEntry({ start: $('#eS', dlg).value, end: $('#eE', dlg).value, pause: $('#eP', dlg).value, meal, park, exp: $('#eX', dlg).value, expText: $('#eXT', dlg).value, note: $('#eN', dlg).value, at: Date.now() });
-  sheet(x.name, html, dlg => { p.entries[C.key(id, d)] = read(dlg); save(); }, (dlg, close) => {
+  sheet(x.name, html, dlg => {
+    const me = read(dlg);
+    // Essen bei der ersten Person des Tages: auf Wunsch für alle an diesem Tag (nur Essen, sonst nichts ändern)
+    const rest = dayPeople(p, d).filter(y => y.id !== id);
+    const firstMeal = me.meal && !(entry(p, id, d) || {}).meal && !rest.some(y => (entry(p, y.id, d) || {}).meal);
+    p.entries[C.key(id, d)] = me;
+    if (firstMeal && rest.length && confirm(`Essen für alle ${rest.length + 1} Personen am ${C.fmtDay(d)} eintragen?`)) {
+      rest.forEach(y => { const e2 = entry(p, y.id, d) || { pause: C.PAUSE }; p.entries[C.key(y.id, d)] = C.cleanEntry({ ...e2, meal: true, at: Date.now() }); });
+      toast('✓ Essen für alle eingetragen');
+    }
+    save();
+  }, (dlg, close) => {
     const segs = () => {
       dlg.querySelectorAll('#eM button').forEach(b => b.classList.toggle('on', (b.dataset.v === '1') === meal));
       dlg.querySelectorAll('#eK button').forEach(b => b.classList.toggle('on', b.dataset.v === park));
@@ -346,7 +370,12 @@ function editEntry(id) {
     dlg.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { const i = $('#eP', dlg); i.value = Math.max(0, Math.min(720, (Number(i.value) || 0) + Number(b.dataset.p))); hrs(); });
     ['#eS', '#eE', '#eP'].forEach(s => $(s, dlg).addEventListener('input', hrs));
     segs(); hrs();
-    if ($('#ePlan', dlg)) $('#ePlan', dlg).onclick = () => { $('#eS', dlg).value = pl.start; $('#eE', dlg).value = pl.end; hrs(); };
+    // Anfang bzw. Ende einzeln setzen: geplante Zeit oder jetzt (auf 5 Minuten gerundet)
+    dlg.querySelectorAll('[data-fill]').forEach(b => b.onclick = () => {
+      let t = b.dataset.t;
+      if (t === 'now') { const n = new Date(), m = Math.round((n.getHours() * 60 + n.getMinutes()) / 5) * 5 % 1440; t = `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; }
+      $(b.dataset.fill === 'S' ? '#eS' : '#eE', dlg).value = t; hrs();
+    });
     if ($('#eAll', dlg)) $('#eAll', dlg).onclick = () => {
       const me = read(dlg), todo = dayPeople(p, d).filter(y => y.id !== id && !entry(p, y.id, d));
       if (!todo.length || !confirm(`Anfang ${me.start || '–'}, Ende ${me.end || '–'}, Pause ${me.pause}′ für ${todo.length} ${todo.length === 1 ? 'Person' : 'Personen'} ohne Eintrag übernehmen?\nBestehende Einträge bleiben, wie sie sind.`)) return;
