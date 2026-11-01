@@ -82,6 +82,10 @@
   .qty { min-width: 64px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; padding: 8px 10px; }
   .big { font-size: 34px; text-align: center; font-weight: 700; }
   .toast { position: fixed; left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom) + 90px); background: #2c313b; padding: 12px 14px; border-radius: 12px; text-align: center; z-index: 20; transition: opacity .4s; }
+  .thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 12px 10px; }
+  .thumbs img { width: 76px; height: 100px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); }
+  .cam { display: block; text-align: center; margin: 0 12px; padding: 13px; border-radius: 12px; background: var(--tile); font-weight: 600; }
+  .big { width: 100%; border-radius: 10px; }
 </style>
 </head>
 <body>
@@ -102,6 +106,33 @@ const pwSet = pw => { try { if (pw) localStorage.setItem(PWKEY, pw); else localS
 const X = XCore;
 let ui = { pid: null, day: null, tab: 'time', pending: null, error: '', show: 'all', q: '' };
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+
+// --- Fotos externer Rapporte: in IndexedDB (zu gross für localStorage) ---------------------------------------
+const IDB = (() => {
+  let dbp = null;
+  const open = () => dbp || (dbp = new Promise((res, rej) => {
+    const r = indexedDB.open('d-img', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('p', { keyPath: 'id' });
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  }));
+  const tx = async (mode, fn) => { const d = await open(); return new Promise((res, rej) => { const t = d.transaction('p', mode), q = fn(t.objectStore('p')); t.oncomplete = () => res(q.result); t.onerror = () => rej(t.error); }); };
+  return { all: () => tx('readonly', st => st.getAll()), put: rec => tx('readwrite', st => st.put(rec)), del: id => tx('readwrite', st => st.delete(id)) };
+})();
+let photos = [];
+const loadPhotos = () => IDB.all().then(l => { photos = l || []; render(); }).catch(() => {});
+const projPhotos = pid => photos.filter(f => f.pid === pid).sort((a, b) => a.at - b.at);
+// Foto verkleinern (lange Seite 1800 px, JPEG): gut lesbar, rund 250 KB
+async function shrink(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Foto konnte nicht gelesen werden.')); i.src = url; });
+    const k = Math.min(1, 1800 / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.round(img.naturalWidth * k), h = Math.round(img.naturalHeight * k);
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, w, h); x.drawImage(img, 0, 0, w, h);
+    return { w, h, jpg: c.toDataURL('image/jpeg', 0.72).split(',')[1] };
+  } finally { URL.revokeObjectURL(url); }
+}
 
 function toast(msg) {
   const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t);
@@ -205,12 +236,15 @@ function viewProject() {
     body = `<h2>${esc(C.fmtDay(ui.day))}${min ? ` · ${C.hours(min)} Std.` : ''}</h2>
       ${noStart || noEnd ? `<div style="margin:0 12px 10px;display:flex;gap:8px">${noStart ? `<button id="okStart" style="flex:1">Anfang bestätigen (${noStart})</button>` : ''}${noEnd ? `<button id="okEnd" style="flex:1">Ende bestätigen (${noEnd})</button>` : ''}</div>` : ''}
       ${list.length ? `<div class="list">${list.map(row).join('')}</div>` : '<div class="empty">An diesem Tag ist niemand eingeplant.</div>'}
-      ${list.some(x => entry(p, x.id, ui.day)) ? '<div style="text-align:center;margin:18px 0"><button class="link" id="dayClear" style="color:var(--bad)">Alle Einträge dieses Tages löschen</button></div>' : ''}`;
+      ${list.some(x => entry(p, x.id, ui.day)) ? '<div style="text-align:center;margin:18px 0"><button class="link" id="dayClear" style="color:var(--bad)">Alle Einträge dieses Tages löschen</button></div>' : ''}
+      ${(() => { const ph = projPhotos(p.project.id).filter(f => f.date === ui.day);
+        return `<h2>Externe Rapporte${ph.length ? ` (${ph.length})` : ''}</h2>${ph.length ? `<div class="thumbs">${ph.map(f => `<img src="data:image/jpeg;base64,${f.jpg}" data-ph="${f.id}" alt="">`).join('')}</div>` : ''}
+          <label class="cam"><input type="file" id="phIn" accept="image/*" capture="environment" hidden>📷 Foto Externer Rapport</label>`; })()}`;
   }
-  const n = Object.keys(p.entries).length + Object.keys(p.ratings).length;
+  const n = Object.keys(p.entries).length + Object.keys(p.ratings).length, nph = projPhotos(p.project.id).length;
   return `${head}<main>${body}
     <div style="text-align:center;margin:36px 0 12px"><button class="link" id="projDel" style="color:var(--bad)">Projekt von diesem Gerät löschen</button></div></main>
-    <div class="bar"><div class="sub">${n} Einträge${p.sentAt ? `<br>gesendet ${new Date(p.sentAt).toLocaleString('de-CH', { dateStyle: 'short', timeStyle: 'short' })}` : ''}</div>
+    <div class="bar"><div class="sub">${n} Einträge${nph ? ` · ${nph} Foto${nph === 1 ? '' : 's'}` : ''}${p.sentAt ? `<br>gesendet ${new Date(p.sentAt).toLocaleString('de-CH', { dateStyle: 'short', timeStyle: 'short' })}` : ''}</div>
       <button class="primary" id="send">Senden</button></div>`;
 }
 
@@ -284,13 +318,30 @@ function bind() {
   if ($('#send')) $('#send').onclick = send;
   if ($('#projDel')) $('#projDel').onclick = () => {
     const p = proj(), sent = Math.max(p.sentAt || 0, p.recvAt || 0); // nur hier geänderte, noch nicht gesendete Einträge
-    const open = (p.kind === 'x' ? [...Object.values(p.take), p.dest] : [...Object.values(p.entries), ...Object.values(p.ratings)]).filter(e => (e.at || 0) > sent).length;
+    const open = (p.kind === 'x' ? [...Object.values(p.take), p.dest] : [...Object.values(p.entries), ...Object.values(p.ratings), ...projPhotos(p.project.id)]).filter(e => (e.at || 0) > sent).length;
     const name = [p.project.no, p.project.name].filter(Boolean).join(' · ');
     if (open && !confirm(`${open} ${open === 1 ? 'Eintrag wurde' : 'Einträge wurden'} noch nicht gesendet und ${open === 1 ? 'geht' : 'gehen'} verloren.\nTrotzdem löschen?`)) return;
     if (!confirm(`Projekt „${name}“ mit allen Einträgen von diesem Gerät löschen?`)) return;
+    projPhotos(p.project.id).forEach(f => IDB.del(f.id).catch(() => {}));
+    photos = photos.filter(f => f.pid !== p.project.id);
     delete db.projects[ui.pid]; save(); ui.pid = null; render(); toast('✓ Projekt gelöscht');
   };
   if (proj() && proj().kind === 'x') { bindList(); return; }
+  if ($('#phIn')) $('#phIn').onchange = async ev => {
+    const p = proj(), d = ui.day, files = [...ev.target.files];
+    for (const f of files) {
+      try { const r = await shrink(f); await IDB.put({ id: Math.random().toString(36).slice(2, 10).padEnd(8, '0'), pid: p.project.id, date: d, at: Date.now(), ...r }); }
+      catch (err) { alert(err.message); }
+    }
+    await loadPhotos(); toast(files.length > 1 ? `✓ ${files.length} Fotos gespeichert` : '✓ Foto gespeichert');
+  };
+  document.querySelectorAll('[data-ph]').forEach(im => im.onclick = () => {
+    const f = photos.find(x => x.id === im.dataset.ph); if (!f) return;
+    sheet(`Externer Rapport · ${C.fmtDay(f.date)}`, `<img class="big" src="data:image/jpeg;base64,${f.jpg}" alt="">
+      <button type="button" id="phDel" class="link" style="color:var(--bad);margin-top:16px">Foto löschen</button>`, () => {}, (dlg, close) => {
+      $('#phDel', dlg).onclick = async () => { if (!confirm('Foto löschen?')) return; await IDB.del(f.id).catch(() => {}); close(); loadPhotos(); };
+    });
+  });
   if ($('#dayClear')) $('#dayClear').onclick = () => {
     const p = proj(), had = dayPeople(p, ui.day).filter(x => entry(p, x.id, ui.day));
     if (!confirm(`${had.length} ${had.length === 1 ? 'Eintrag' : 'Einträge'} vom ${C.fmtDay(ui.day)} löschen?\nDanach steht wieder die geplante Zeit da.`)) return;
@@ -408,7 +459,7 @@ async function send() {
   try {
     const head = { id: p.project.id, no: p.project.no, name: p.project.name };
     const text = await C.seal(p.kind === 'x' ? { t: 'y', v: 1, project: head, take: p.take, dest: p.dest, at: Date.now() }
-      : { t: 'b', v: 1, project: head, entries: p.entries, ratings: p.ratings, at: Date.now() }, pw);
+      : { t: 'b', v: 1, project: head, entries: p.entries, ratings: p.ratings, photos: projPhotos(p.project.id).map(({ id, date, at, w, h, jpg }) => ({ id, date, at, w, h, jpg })), at: Date.now() }, pw);
     const safe = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9-]+/g, '-').replace(/^-|-$/g, '');
     const name = `${safe(p.project.no || p.project.name) || 'Projekt'}${p.kind === 'x' ? '_Liste' : ''}.txt`;
     const file = new File([text], name, { type: 'text/plain' });
@@ -426,6 +477,7 @@ async function send() {
 window.addEventListener('hashchange', () => { takeHash(); render(); });
 takeHash();
 render();
+loadPhotos();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
 </body>
