@@ -27,12 +27,17 @@
   button.primary { background: var(--acc); color: #fff; font-weight: 600; }
   button.link { background: none; color: var(--acc); padding: 6px 4px; }
   button:active { opacity: .7; }
-  .chips { display: flex; gap: 8px; overflow-x: auto; padding: 10px 0 2px; scrollbar-width: none; }
+  .chips { display: flex; gap: 8px; overflow-x: auto; padding: 10px 5px 6px; scrollbar-width: none; }
   .chips::-webkit-scrollbar { display: none; }
   .chip { flex: none; padding: 8px 14px; border-radius: 20px; background: var(--tile); font-size: 15px; text-align: center; line-height: 1.2; }
   .chip small { display: block; color: var(--muted); font-size: 12px; }
   .chip.on { background: var(--acc); color: #fff; }
   .chip.on small { color: #dbe9ff; }
+  /* Stand des Tages: gelb = angefangen, grün = alle abgeschlossen; der gewählte Tag hat einen weissen Rand */
+  .chip.st-half { background: var(--warn); color: #111; }
+  .chip.st-ok { background: var(--ok); color: #111; }
+  .chip.st-half small, .chip.st-ok small { color: #333; }
+  .chip.on.st-half, .chip.on.st-ok { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px #fff; }
   .tabs { display: flex; gap: 6px; margin-top: 8px; background: var(--tile); border-radius: 10px; padding: 3px; }
   .tabs button { flex: 1; padding: 7px; border-radius: 8px; background: none; font-size: 15px; }
   .tabs button.on { background: #3a3f4b; font-weight: 600; }
@@ -143,6 +148,12 @@ const proj = () => db.projects[ui.pid];
 const entry = (p, pid, d) => (p.entries || {})[C.key(pid, d)];
 const planOf = (p, pid, d) => (p.plan || {})[C.key(pid, d)];
 // Personal eines Tages: laut Plan nur die Eingeplanten, ohne Plan alle
+// Stand eines Tages: '' = noch nichts, 'half' = etwas eingetragen, 'ok' = bei allen Anfang und Ende bestätigt
+const dayState = (p, d) => {
+  const list = dayPeople(p, d), es = list.map(x => entry(p, x.id, d)).filter(e => e && (e.start || e.end));
+  if (!es.length) return '';
+  return list.length && list.every(x => { const e = entry(p, x.id, d); return e && e.start && e.end; }) ? 'ok' : 'half';
+};
 const dayPeople = (p, d) => (Object.keys(p.plan || {}).length ? p.people.filter(x => planOf(p, x.id, d)) : p.people);
 const dayMin = (p, d) => p.people.reduce((a, x) => a + C.workMin(entry(p, x.id, d)), 0);
 
@@ -217,7 +228,7 @@ function viewProject() {
   const head = `<header><div class="top"><button class="link" id="back">‹ Projekte</button><h1>${esc(p.project.no || p.project.name)}</h1></div>
     <div class="sub">${esc([p.project.name, p.project.place].filter(Boolean).join(' · '))}</div>
     <div class="tabs"><button data-tab="time" class="${ui.tab === 'time' ? 'on' : ''}">Zeiten</button><button data-tab="rate" class="${ui.tab === 'rate' ? 'on' : ''}">Bewertung</button></div>
-    ${ui.tab === 'time' ? `<div class="chips">${days.map(d => `<button class="chip ${d === ui.day ? 'on' : ''}" data-day="${d}">${esc(C.fmtDay(d))}<small>${esc(p.labels[d] || (d === today() ? 'heute' : ''))}&nbsp;</small></button>`).join('')}</div>` : ''}</header>`;
+    ${ui.tab === 'time' ? `<div class="chips">${days.map(d => `<button class="chip ${d === ui.day ? 'on' : ''} ${(st => (st ? `st-${st}` : ''))(dayState(p, d))}" data-day="${d}">${esc(C.fmtDay(d))}<small>${esc(p.labels[d] || (d === today() ? 'heute' : ''))}&nbsp;</small></button>`).join('')}</div>` : ''}</header>`;
   let body;
   if (!p.people.length) body = '<div class="empty">In diesem Projekt ist noch niemand.</div>';
   else if (ui.tab === 'rate') {
