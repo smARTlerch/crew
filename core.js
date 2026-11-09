@@ -1,5 +1,5 @@
 // Gemeinsamer Teil: Verschlüsseln, Einträge prüfen und zusammenführen, Zeit rechnen.
-// Eintrag: { start, end, pause (Min.), meal, park ('' | 'got' | 'exp'), exp (CHF), expText, note, at }
+// Eintrag: { start, end, pause (Min.), meal (Mittagessen), dinner (Abendessen), park ('' | 'got' | 'exp'), exp (CHF), expText, note, at }
 'use strict';
 
 (function (root) {
@@ -46,7 +46,7 @@
     const exp = Math.round(Number(String(e.exp == null ? '' : e.exp).replace(',', '.')) * 100) / 100;
     const pause = Math.round(Number(e.pause));
     return { start: isTime(e.start) ? e.start : '', end: isTime(e.end) ? e.end : '', pause: pause >= 0 && pause <= 720 ? pause : PAUSE,
-      meal: !!e.meal, park: PARK[e.park] && e.park ? e.park : '', exp: exp > 0 && exp < 100000 ? exp : 0, expText: str(e.expText, 200), note: str(e.note, 500), at: Number(e.at) || 0 };
+      meal: !!e.meal, dinner: !!e.dinner, park: PARK[e.park] && e.park ? e.park : '', exp: exp > 0 && exp < 100000 ? exp : 0, expText: str(e.expText, 200), note: str(e.note, 500), at: Number(e.at) || 0 };
   }
   function cleanRating(r) {
     if (!r || typeof r !== 'object') return null;
@@ -83,6 +83,9 @@
   const chf = n => (n ? n.toLocaleString('de-CH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '');
   const fmtDay = d => new Date(`${d}T12:00:00`).toLocaleDateString('de-CH', { weekday: 'short', day: '2-digit', month: '2-digit' });
 
-  const api = { PAUSE, PARK, key, seal, open, cleanEntry, cleanRating, merge, mergeMap, workMin, hours, chf, fmtDay, isDate, isTime };
+  // Essen als Text: „Mittag + Abend“, „Mittag“, „Abend“ oder leer
+  const mealText = e => [e && e.meal ? 'Mittag' : '', e && e.dinner ? 'Abend' : ''].filter(Boolean).join(' + ');
+
+  const api = { PAUSE, PARK, mealText, key, seal, open, cleanEntry, cleanRating, merge, mergeMap, workMin, hours, chf, fmtDay, isDate, isTime };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Core = api;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -217,7 +217,7 @@ function personMeta(e, pl) {
   const part = (t, plan) => (t ? `${t} ✓` : plan ? `(${plan})` : '–');
   if (e.start || e.end || pl) bits.push(`${part(e.start, pl && pl.start)} – ${part(e.end, pl && pl.end)}${e.start && e.end && e.pause ? ` · ${e.pause}′ Pause` : ''}`);
   if (pl && e.start && e.end && (e.start !== pl.start || e.end !== pl.end)) bits.push(`geplant ${pl.start}–${pl.end}`);
-  if (e.meal) bits.push('🍴'); if (e.park) bits.push(`P ${C.PARK[e.park]}`); if (e.exp) bits.push(`CHF ${C.chf(e.exp)}`); if (e.note) bits.push('📝');
+  if (C.mealText(e)) bits.push(`🍴 ${C.mealText(e)}`); if (e.park) bits.push(`P ${C.PARK[e.park]}`); if (e.exp) bits.push(`CHF ${C.chf(e.exp)}`); if (e.note) bits.push('📝');
   return esc(bits.join(' · ')) || 'noch nichts';
 }
 
@@ -392,8 +392,8 @@ function sheet(title, html, onSave, extra) {
 }
 function editEntry(id) {
   const p = proj(), x = p.people.find(y => y.id === id), d = ui.day, pl = planOf(p, id, d);
-  const e = entry(p, id, d) || { start: '', end: '', pause: C.PAUSE, meal: false, park: '', exp: 0, expText: '', note: '' };
-  let park = e.park, meal = e.meal;
+  const e = entry(p, id, d) || { start: '', end: '', pause: C.PAUSE, meal: false, dinner: false, park: '', exp: 0, expText: '', note: '' };
+  let park = e.park; const food = { meal: !!e.meal, dinner: !!e.dinner };
   // gleiche Zeiten für alle nur ohne Plan (sonst gilt pro Person die geplante Zeit)
   const others = Object.keys(p.plan || {}).length ? 0 : dayPeople(p, d).filter(y => y.id !== id && !entry(p, y.id, d)).length;
   const html = `<div class="sub" style="margin-bottom:14px">${esc((pl && pl.func) || x.func || '')} · ${esc(C.fmtDay(d))}${pl ? `<br>geplant ${esc(pl.start)}–${esc(pl.end)}${pl.note ? ` · ${esc(pl.note)}` : ''}` : ''}</div>
@@ -402,32 +402,34 @@ function editEntry(id) {
     <div class="grid2" style="margin:-6px 0 14px">${['S', 'E'].map(k => `<div style="display:flex;gap:6px">${pl ? `<button type="button" class="small" data-fill="${k}" data-t="${esc(k === 'S' ? pl.start : pl.end)}" style="flex:1;padding:8px 4px;font-size:14px">${esc(k === 'S' ? pl.start : pl.end)} geplant</button>` : ''}<button type="button" data-fill="${k}" data-t="now" style="flex:1;padding:8px 4px;font-size:14px">jetzt</button></div>`).join('')}</div>
     <label class="f"><span>Pause (Minuten)</span><div class="stepper"><button type="button" data-p="-15">−</button><input id="eP" type="number" inputmode="numeric" min="0" max="720" step="5" value="${e.pause}"><button type="button" data-p="15">+</button></div></label>
     <div class="hours" id="eH"></div>
-    <label class="f"><span>Essen</span><div class="seg" id="eM"><button type="button" data-v="0">Nein</button><button type="button" data-v="1">Ja</button></div></label>
+    <label class="f"><span>Essen (antippen, beides möglich)</span><div class="seg" id="eM"><button type="button" data-m="meal">Mittagessen</button><button type="button" data-m="dinner">Abendessen</button></div></label>
     <label class="f"><span>Parkticket</span><div class="seg" id="eK">${Object.entries(C.PARK).map(([k, v]) => `<button type="button" data-v="${k}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('')}</div></label>
     <div class="grid2"><label class="f"><span>Spesen CHF</span><input id="eX" type="text" inputmode="decimal" placeholder="0.00" value="${e.exp ? esc(String(e.exp)) : ''}"></label>
       <label class="f"><span>Spesen für</span><input id="eXT" type="text" placeholder="z.B. Parkhaus" value="${esc(e.expText)}"></label></div>
     <label class="f"><span>Sonstiges</span><textarea id="eN" placeholder="Bemerkung">${esc(e.note)}</textarea></label>
     ${others ? `<button type="button" id="eAll" style="width:100%;margin-top:6px">Anfang, Ende und Pause für alle ohne Eintrag übernehmen (${others})</button>` : ''}
     ${entry(p, id, d) ? '<button type="button" id="eDel" class="link" style="color:var(--bad);margin-top:16px">Eintrag löschen</button>' : ''}`;
-  const read = dlg => C.cleanEntry({ start: $('#eS', dlg).value, end: $('#eE', dlg).value, pause: $('#eP', dlg).value, meal, park, exp: $('#eX', dlg).value, expText: $('#eXT', dlg).value, note: $('#eN', dlg).value, at: Date.now() });
+  const read = dlg => C.cleanEntry({ start: $('#eS', dlg).value, end: $('#eE', dlg).value, pause: $('#eP', dlg).value, meal: food.meal, dinner: food.dinner, park, exp: $('#eX', dlg).value, expText: $('#eXT', dlg).value, note: $('#eN', dlg).value, at: Date.now() });
   sheet(x.name, html, dlg => {
     const me = read(dlg);
-    // Essen bei der ersten Person des Tages: auf Wunsch für alle an diesem Tag (nur Essen, sonst nichts ändern)
+    // Mittag- bzw. Abendessen bei der ersten Person des Tages: auf Wunsch für alle an diesem Tag (nur das Essen, sonst nichts ändern)
     const rest = dayPeople(p, d).filter(y => y.id !== id);
-    const firstMeal = me.meal && !(entry(p, id, d) || {}).meal && !rest.some(y => (entry(p, y.id, d) || {}).meal);
+    const first = k => me[k] && !(entry(p, id, d) || {})[k] && !rest.some(y => (entry(p, y.id, d) || {})[k]);
+    const ask = ['meal', 'dinner'].filter(first);
     p.entries[C.key(id, d)] = me;
-    if (firstMeal && rest.length && confirm(`Essen für alle ${rest.length + 1} Personen am ${C.fmtDay(d)} eintragen?`)) {
-      rest.forEach(y => { const e2 = entry(p, y.id, d) || { pause: C.PAUSE }; p.entries[C.key(y.id, d)] = C.cleanEntry({ ...e2, meal: true, at: Date.now() }); });
-      toast('✓ Essen für alle eingetragen');
+    const what = ask.map(k => (k === 'meal' ? 'Mittagessen' : 'Abendessen')).join(' und ');
+    if (ask.length && rest.length && confirm(`${what} für alle ${rest.length + 1} Personen am ${C.fmtDay(d)} eintragen?`)) {
+      rest.forEach(y => { const e2 = entry(p, y.id, d) || { pause: C.PAUSE }; p.entries[C.key(y.id, d)] = C.cleanEntry({ ...e2, ...Object.fromEntries(ask.map(k => [k, true])), at: Date.now() }); });
+      toast(`✓ ${what} für alle eingetragen`);
     }
     save();
   }, (dlg, close) => {
     const segs = () => {
-      dlg.querySelectorAll('#eM button').forEach(b => b.classList.toggle('on', (b.dataset.v === '1') === meal));
+      dlg.querySelectorAll('#eM button').forEach(b => b.classList.toggle('on', food[b.dataset.m]));
       dlg.querySelectorAll('#eK button').forEach(b => b.classList.toggle('on', b.dataset.v === park));
     };
     const hrs = () => { const m = C.workMin(read(dlg)); $('#eH', dlg).textContent = m ? `= ${C.hours(m)} Std.` : ''; };
-    dlg.querySelectorAll('#eM button').forEach(b => b.onclick = () => { meal = b.dataset.v === '1'; segs(); });
+    dlg.querySelectorAll('#eM button').forEach(b => b.onclick = () => { food[b.dataset.m] = !food[b.dataset.m]; segs(); });
     dlg.querySelectorAll('#eK button').forEach(b => b.onclick = () => { park = b.dataset.v; segs(); });
     dlg.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { const i = $('#eP', dlg); i.value = Math.max(0, Math.min(720, (Number(i.value) || 0) + Number(b.dataset.p))); hrs(); });
     ['#eS', '#eE', '#eP'].forEach(s => $(s, dlg).addEventListener('input', hrs));
